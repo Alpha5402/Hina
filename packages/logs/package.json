@@ -1,0 +1,14 @@
+{
+  "name": "@hina/logs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --project tsconfig.json --noEmit false --declaration --rewriteRelativeImportExtensions --outDir dist",
+    "typecheck": "tsc --noEmit --project tsconfig.json"
+  },
+  "dependencies": {
+    "@hina/core": "workspace:*"
+  }
+}

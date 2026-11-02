@@ -1,4 +1,13 @@
 export { parseActionProposal, parseEvent } from "./validation.ts";
+export type {
+  Model,
+  ModelImage,
+  ModelMessage,
+  ModelRequest,
+  ModelResponse,
+  ModelUsage,
+} from "./model.ts";
+export { parseModelResponse } from "./model.ts";
 
 export type Awaitable<T> = T | Promise<T>;
 export type Dispose = () => Awaitable<void>;
@@ -13,13 +22,30 @@ export interface TextContent {
   readonly text: string;
 }
 
+export interface ImageAttachment {
+  readonly type: "image";
+  readonly url: string;
+  readonly mediaType: string;
+  readonly name?: string;
+}
+
+export interface MediaContent {
+  readonly type: "message";
+  readonly text: string;
+  readonly images: readonly ImageAttachment[];
+}
+
 export interface RuntimeEvent {
   readonly id: string;
   readonly origin: ChannelIdentity;
   readonly timestamp: string;
   readonly actorId: string;
   readonly conversationId: string;
-  readonly content: TextContent;
+  /** 缺省表示渠道尚未提供分类；不根据标识符格式猜测。 */
+  readonly conversationType?: "direct" | "group" | "channel";
+  /** 渠道明确识别出的直接寻址，例如群内 @角色；缺省不授予群聊回复权限。 */
+  readonly directedToCharacter?: boolean;
+  readonly content: TextContent | MediaContent;
 }
 
 export interface MessageTarget extends ChannelIdentity {

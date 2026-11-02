@@ -1,5 +1,6 @@
 node_modules/
 .tools/
+/.hina/
 dist/
 coverage/
 *.tsbuildinfo

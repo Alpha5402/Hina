@@ -14,6 +14,10 @@
   "scripts": {
     "dev": "bun run --cwd apps/runtime dev",
     "start": "bun run --cwd apps/runtime start",
+    "qq": "bun run --cwd apps/runtime qq",
+    "qq:login": "bun run --cwd apps/runtime qq:login",
+    "dashboard:dev": "bun run --cwd apps/dashboard dev",
+    "dashboard:build": "bun run --cwd apps/dashboard build",
     "build": "bun run --filter '@hina/*' build",
     "typecheck": "bun run --filter '@hina/*' typecheck",
     "lint": "biome lint .",

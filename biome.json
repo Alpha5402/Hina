@@ -1,8 +1,19 @@
 {
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**/*.ts", "**/*.json", "!**/node_modules", "!**/dist", "!.tools"]
+    "includes": [
+      "**/*.ts",
+      "**/*.json",
+      "**/*.vue",
+      "**/*.css",
+      "**/*.html",
+      "!**/node_modules",
+      "!**/dist",
+      "!!**/.hina",
+      "!.tools"
+    ]
   },
   "formatter": {
     "enabled": true,
@@ -25,5 +36,9 @@
       "quoteStyle": "double",
       "semicolons": "always"
     }
+  },
+  "html": {
+    "experimentalFullSupportEnabled": true,
+    "formatter": { "enabled": true, "indentScriptAndStyle": false }
   }
 }

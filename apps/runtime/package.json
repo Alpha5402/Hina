@@ -6,15 +6,23 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
-    "build": "bun build src/index.ts --target=bun --outdir=dist",
+    "build": "bun build src/index.ts src/qq.ts src/qq-login.ts --target=bun --outdir=dist",
     "start:built": "bun dist/index.js",
     "smoke": "bun smoke.ts",
+    "qq": "bun src/qq.ts",
+    "qq:login": "bun src/qq-login.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json"
   },
   "dependencies": {
-    "@hina/core": "workspace:*"
+    "@hina/core": "workspace:*",
+    "@hina/logs": "workspace:*",
+    "@hina/settings": "workspace:*",
+    "@tencent-connect/qqbot-connector": "1.2.0",
+    "@tencent-connect/qqbot-nodejs": "1.0.5",
+    "qrcode": "1.5.4"
   },
   "devDependencies": {
-    "@types/bun": "1.4.4"
+    "@types/bun": "1.4.4",
+    "@types/qrcode": "1.5.6"
   }
 }

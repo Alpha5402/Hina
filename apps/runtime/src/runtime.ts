@@ -171,7 +171,9 @@ export class Runtime {
   }
 
   private async receive(value: unknown): Promise<EventResult> {
-    if (this.currentState !== "running") throw new Error("Runtime 尚未运行或已经停止");
+    if (this.currentState !== "running" && this.currentState !== "starting") {
+      throw new Error("Runtime 尚未运行或已经停止");
+    }
     const event = parseEvent(value);
     const identity = this.channel.identity;
     if (
@@ -192,7 +194,8 @@ export class Runtime {
     }
 
     const conversation = conversationKey(event);
-    const previous = this.tails.get(conversation) ?? Promise.resolve();
+    // 网络 Channel 在 READY 附近即可收到事件；接受输入，但必须等启动成功后才处理。
+    const previous = this.tails.get(conversation) ?? this.starting ?? Promise.resolve();
     const task = previous
       .then(() => this.process(event))
       .finally(() => {
