@@ -1,0 +1,30 @@
+{
+  "name": "hina",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.4",
+  "engines": {
+    "bun": "1.4.4"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --cwd apps/runtime dev",
+    "start": "bun run --cwd apps/runtime start",
+    "build": "bun run --filter '@hina/*' build",
+    "typecheck": "bun run --filter '@hina/*' typecheck",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "test": "bun test --pass-with-no-tests",
+    "smoke": "bun run build && bun run --cwd apps/runtime start:built",
+    "check": "bun run format:check && bun run lint && bun run typecheck"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.4",
+    "typescript": "7.0.2"
+  }
+}
