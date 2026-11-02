@@ -354,11 +354,20 @@ table {
 .col-processing {
   width: 96px;
 }
+.col-decision {
+  width: 88px;
+}
+.decision-state {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .processing-state {
   font-size: 12px;
   color: var(--text-muted);
   white-space: nowrap;
 }
+.processing-state[data-state="deciding"],
 .processing-state[data-state="generating"],
 .processing-state[data-state="sending"] {
   color: var(--accent);

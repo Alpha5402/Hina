@@ -4,18 +4,22 @@ import { ChevronDown, X } from "@lucide/vue";
 import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import ImagePreview from "./ImagePreview.vue";
 import { contentLabel, messageText } from "./message-display";
+import { decisionLabel, processingError, processingLabel } from "./processing-display";
 import { useMessageDetail } from "./use-message-detail";
-import { processingError, processingLabel } from "./processing-display";
 
 const props = defineProps<{ message: MessageLogEntry }>();
 const emit = defineEmits<{ close: [] }>();
 const detail = useMessageDetail(() => props.message);
+const decision = computed(() => detail.value.processing?.decision);
 const modelResponse = computed(() => {
   const current = detail.value.processing;
   return current && "response" in current ? current.response : undefined;
 });
 const apiState = computed(() =>
-  !detail.value.processing || detail.value.processing.status === "skipped"
+  !detail.value.processing ||
+  detail.value.processing.status === "skipped" ||
+  detail.value.processing.status === "deciding" ||
+  (detail.value.processing.status === "failed" && detail.value.processing.stage === "decision")
     ? "未调用"
     : detail.value.processing.status === "generating"
       ? "请求中"
@@ -126,10 +130,34 @@ onUnmounted(() => {
           <section v-if="detail.processing" class="processing-detail" aria-label="处理链路">
             <ol class="processing-steps">
               <li><span>输入</span><span>已接收</span></li>
-              <li><span>API</span><span>{{ apiState }}</span></li>
+              <li><span>决策</span><span>{{ decisionLabel(detail) }}</span></li>
+              <li><span>响应</span><span>{{ apiState }}</span></li>
               <li><span>输出</span><span>{{ outputState }}</span></li>
             </ol>
-            <p v-if="detail.processing.status === 'skipped'" class="processing-note">
+            <div v-if="decision" class="decision-result">
+              <p v-if="decision.status === 'skipped'" class="processing-note">
+                未配置决策模型，已跳过决策
+              </p>
+              <template v-else-if="decision.status === 'evaluated'">
+                <p v-if="decision.result.type === 'probability'" class="processing-note">
+                  回复概率 {{ (decision.result.probability * 100).toFixed(1) }}% · 阈值
+                  {{ (decision.threshold * 100).toFixed(1) }}% ·
+                  {{ decision.passed ? "通过" : "未超过阈值，不回复" }}
+                </p>
+                <p v-else class="processing-note">模型拒绝判断，不调用响应模型</p>
+                <p class="model-metrics">
+                  {{ decision.result.model }} · {{ decision.result.durationMs }} ms<span
+                    v-if="decision.result.usage"
+                  >
+                    · {{ decision.result.usage.totalTokens }} Token</span
+                  >
+                </p>
+              </template>
+            </div>
+            <p
+              v-if="detail.processing.status === 'skipped' && decision?.status !== 'evaluated'"
+              class="processing-note"
+            >
               {{ processingLabel(detail) }}
             </p>
             <p v-if="detail.processing.status === 'blocked'" class="processing-note">
@@ -139,7 +167,7 @@ onUnmounted(() => {
               {{ processingError(detail) }}
             </p>
             <div v-if="modelResponse" class="model-response">
-              <h3 class="detail-section-title">API 响应</h3>
+              <h3 class="detail-section-title">模型响应</h3>
               <p class="model-response-text">{{ modelResponse.text }}</p>
               <p class="model-metrics">
                 {{ modelResponse.model }} · {{ modelResponse.durationMs }} ms<span

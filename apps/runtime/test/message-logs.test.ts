@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEvent, type RuntimeEvent } from "@hina/core";
-import { parseLogQuery, parseLogResponse } from "@hina/logs";
+import { parseLogQuery, parseLogResponse, parseProcessing } from "@hina/logs";
 import { fetchImage, validateImageUrl } from "../src/logs/images";
 import { startLogServer } from "../src/logs/server";
 import { SQLiteMessageLogStore } from "../src/logs/store";
@@ -43,6 +43,39 @@ const image = {
 };
 
 describe("按消息记录", () => {
+  test("决策日志保留概率、阈值与结果，中断决策不重放", () => {
+    const logs = store();
+    const input = event("decision");
+    logs.append(input);
+    logs.recordProcessing(input, {
+      status: "deciding",
+      startedAt: new Date().toISOString(),
+      decision: { status: "evaluating", model: "gpt-6-luna", threshold: 0.7 },
+    });
+    logs.interruptPending();
+    expect(logs.find(1)?.processing).toMatchObject({
+      status: "failed",
+      stage: "decision",
+      code: "interrupted",
+      decision: { status: "evaluating" },
+    });
+    const low = {
+      status: "skipped",
+      reason: "decision-threshold",
+      decision: {
+        status: "evaluated",
+        threshold: 0.7,
+        passed: false,
+        result: { type: "probability", model: "gpt-6-luna", probability: 0.3, durationMs: 150 },
+      },
+    };
+    logs.recordProcessing(input, parseProcessing(low));
+    expect(logs.find(1)?.processing).toMatchObject(low);
+    expect(() =>
+      parseProcessing({ ...low, decision: { ...low.decision, passed: true } }),
+    ).toThrow();
+    expect(logs.query(query()).retainedCount).toBe(1);
+  });
   test("v1 日志迁移保留原始消息，未完成调用在明确恢复入口标记中断而不重放", async () => {
     const folder = await mkdtemp(join(tmpdir(), "hina-log-migration-"));
     cleanups.push(() => rm(folder, { recursive: true, force: true }));

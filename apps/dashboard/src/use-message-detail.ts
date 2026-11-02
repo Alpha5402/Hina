@@ -22,7 +22,7 @@ export function useMessageDetail(source: () => MessageLogEntry) {
         disposed ||
         document.visibilityState !== "visible" ||
         !entry.value.processing ||
-        !["generating", "generated", "sending"].includes(entry.value.processing.status)
+        !["deciding", "generating", "generated", "sending"].includes(entry.value.processing.status)
       )
         return;
       pending = true;

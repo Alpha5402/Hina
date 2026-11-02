@@ -1,4 +1,5 @@
 import type {
+  Decision,
   EventContext,
   Model,
   ModelMessage,
@@ -6,21 +7,26 @@ import type {
   RuntimeEvent,
   RuntimeHooks,
 } from "@hina/core";
-import type { MessageProcessing } from "@hina/logs";
+import { parseDecisionResult } from "@hina/core";
+import type { DecisionTrace, MessageProcessing } from "@hina/logs";
 import { conversationKey, eventKey } from "../context";
 import { fetchImage } from "../logs/images";
 import type { MessageLogStore } from "../logs/store";
 import { ServiceError } from "../settings/errors";
 import type { EncryptedSettingsStore, LlmConfiguration } from "../settings/store";
 import { OpenAICompatibleModel } from "./openai-compatible";
+import { OpenAIDecision } from "./openai-decision";
 
 interface Turn {
   readonly config: LlmConfiguration;
   readonly controller: AbortController;
+  decision: DecisionTrace;
+  stage: "decision" | "model";
   response?: ModelResponse;
 }
 interface PipelineOptions {
   readonly model?: (config: LlmConfiguration) => Model;
+  readonly decision?: (config: LlmConfiguration) => Decision;
   readonly image?: typeof fetchImage;
   readonly now?: () => number;
 }
@@ -61,24 +67,26 @@ export class ModelPipeline {
         if (
           this.settings.current()?.revision !== turn.config.revision ||
           !this.settings.current()?.enabled ||
+          (turn.config.decisionModel &&
+            (turn.decision.status !== "evaluated" || !turn.decision.passed)) ||
           turn.controller.signal.aborted ||
           action.target.channelId !== "qq" ||
           action.target.accountId !== this.appId ||
           action.target.conversationId !== event.conversationId ||
           action.content.text !== turn.response.text
         ) {
-          this.logs.recordProcessing(event, { status: "blocked", response: turn.response });
+          this.record(event, { status: "blocked", response: turn.response });
           this.finish(event);
           return "deny";
         }
-        this.logs.recordProcessing(event, { status: "sending", response: turn.response });
+        this.record(event, { status: "sending", response: turn.response });
         return "allow";
       },
       afterSend: ({ event }) => {
         const turn = this.turns.get(eventKey(event));
         try {
           if (turn?.response) {
-            this.logs.recordProcessing(event, {
+            this.record(event, {
               status: "sent",
               response: turn.response,
               sentAt: new Date(this.now()).toISOString(),
@@ -94,20 +102,20 @@ export class ModelPipeline {
         const turn = this.turns.get(eventKey(event));
         try {
           if (sentCount > 0 && turn?.response)
-            this.logs.recordProcessing(event, {
+            this.record(event, {
               status: "sent",
               response: turn.response,
               sentAt: new Date(this.now()).toISOString(),
             });
           else
-            this.logs.recordProcessing(event, {
+            this.record(event, {
               status: "failed",
               stage:
                 stage === "send" || stage === "afterSend"
                   ? "send"
                   : stage === "beforeSend"
                     ? "policy"
-                    : "model",
+                    : (turn?.stage ?? "model"),
               code:
                 stage === "send"
                   ? "delivery_unconfirmed"
@@ -134,9 +142,7 @@ export class ModelPipeline {
       event.origin.accountId !== this.appId ||
       !(
         event.conversationType === "direct" ||
-        (config.replyScope === "direct-and-mentions" &&
-          event.conversationType === "group" &&
-          event.directedToCharacter === true)
+        (config.replyScope === "direct-and-groups" && event.conversationType === "group")
       )
     )
       reason = "scope";
@@ -170,9 +176,16 @@ export class ModelPipeline {
     }
     this.calls.push(now);
     this.shared.set(eventKey(event), now);
-    this.turns.set(eventKey(event), { config, controller: new AbortController() });
-    this.logs.recordProcessing(event, {
-      status: "generating",
+    this.turns.set(eventKey(event), {
+      config,
+      controller: new AbortController(),
+      stage: config.decisionModel ? "decision" : "model",
+      decision: config.decisionModel
+        ? { status: "evaluating", model: config.decisionModel, threshold: config.decisionThreshold }
+        : { status: "skipped", reason: "not-configured" },
+    });
+    this.record(event, {
+      status: config.decisionModel ? "deciding" : "generating",
       startedAt: new Date(now).toISOString(),
     });
     return "continue";
@@ -223,6 +236,43 @@ export class ModelPipeline {
           text: `${last.text}\n[本条消息包含图片，但图片未提供给模型。]`,
         };
     }
+    if (turn.config.decisionModel) {
+      const decision = this.options.decision?.(turn.config) ?? new OpenAIDecision(turn.config);
+      const result = parseDecisionResult(
+        await decision.evaluate(
+          [
+            {
+              role: "system",
+              text: `当前会话：${context.event.conversationType === "group" ? "群聊" : "私聊"}。\n${turn.config.systemPrompt}`,
+            },
+            ...history,
+          ],
+          signal,
+        ),
+      );
+      signal.throwIfAborted();
+      const passed =
+        result.type === "probability" && result.probability > turn.config.decisionThreshold;
+      turn.decision = {
+        status: "evaluated",
+        result,
+        threshold: turn.config.decisionThreshold,
+        passed,
+      };
+      if (!passed) {
+        this.record(context.event, {
+          status: "skipped",
+          reason: result.type === "refusal" ? "decision-refused" : "decision-threshold",
+        });
+        this.finish(context.event);
+        return [];
+      }
+      this.record(context.event, {
+        status: "generating",
+        startedAt: new Date(this.now()).toISOString(),
+      });
+    }
+    turn.stage = "model";
     const model = this.options.model?.(turn.config) ?? new OpenAICompatibleModel(turn.config);
     const response = await model.generate(
       {
@@ -233,7 +283,7 @@ export class ModelPipeline {
     );
     signal.throwIfAborted();
     turn.response = response;
-    this.logs.recordProcessing(context.event, { status: "generated", response });
+    this.record(context.event, { status: "generated", response });
     return [
       {
         type: "message.send" as const,
@@ -241,6 +291,11 @@ export class ModelPipeline {
         content: { type: "text" as const, text: response.text },
       },
     ];
+  }
+
+  private record(event: RuntimeEvent, processing: MessageProcessing): void {
+    const decision = this.turns.get(eventKey(event))?.decision;
+    this.logs.recordProcessing(event, { ...processing, ...(decision ? { decision } : {}) });
   }
 
   private finish(event: RuntimeEvent): void {

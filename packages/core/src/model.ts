@@ -32,6 +32,22 @@ export interface Model {
   generate(request: ModelRequest, signal: AbortSignal): Promise<ModelResponse>;
 }
 
+export function parseModelUsage(input: unknown): ModelUsage {
+  if (typeof input !== "object" || input === null || Array.isArray(input))
+    throw new TypeError("模型用量无效");
+  const raw = input as Record<string, unknown>;
+  const number = (input: unknown) => {
+    if (typeof input !== "number" || !Number.isSafeInteger(input) || input < 0)
+      throw new TypeError("模型用量无效");
+    return input;
+  };
+  return Object.freeze({
+    inputTokens: number(raw.inputTokens),
+    outputTokens: number(raw.outputTokens),
+    totalTokens: number(raw.totalTokens),
+  });
+}
+
 export function parseModelResponse(input: unknown): ModelResponse {
   if (typeof input !== "object" || input === null) throw new TypeError("模型响应无效");
   const value = input as Record<string, unknown>;
@@ -51,19 +67,7 @@ export function parseModelResponse(input: unknown): ModelResponse {
     throw new TypeError("模型响应字段无效");
   let usage: ModelUsage | undefined;
   if (value.usage !== undefined) {
-    if (typeof value.usage !== "object" || value.usage === null)
-      throw new TypeError("模型用量无效");
-    const raw = value.usage as Record<string, unknown>;
-    const number = (input: unknown) => {
-      if (typeof input !== "number" || !Number.isSafeInteger(input) || input < 0)
-        throw new TypeError("模型用量无效");
-      return input;
-    };
-    usage = Object.freeze({
-      inputTokens: number(raw.inputTokens),
-      outputTokens: number(raw.outputTokens),
-      totalTokens: number(raw.totalTokens),
-    });
+    usage = parseModelUsage(value.usage);
   }
   return Object.freeze({
     model: value.model,

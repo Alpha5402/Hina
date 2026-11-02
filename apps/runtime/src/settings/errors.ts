@@ -7,7 +7,9 @@ export type ServiceErrorCode =
   | "secure_storage"
   | "save_failed"
   | "not_configured"
+  | "decision_required"
   | "provider_auth"
+  | "provider_refusal"
   | "provider_rejected"
   | "provider_quota"
   | "provider_model"
@@ -30,14 +32,15 @@ const messages: Record<ServiceErrorCode, string> = {
   secure_storage: "无法访问系统凭据库，未保存明文凭据",
   save_failed: "模型配置保存失败",
   not_configured: "尚未配置模型",
+  decision_required: "请填写决策模型；留空时会跳过决策",
   provider_auth: "模型接口拒绝了凭据",
+  provider_refusal: "响应模型拒绝生成回复",
   provider_rejected: "模型接口拒绝了请求，请核对模型和参数",
   provider_quota: "API 额度或计费受限，请检查余额和使用限额",
   provider_model: "模型不存在或当前 API Key 没有访问权限",
   provider_access: "模型接口拒绝访问，请检查项目和 API Key 权限",
   provider_parameter: "模型接口不接受当前参数，请检查请求设置",
-  provider_token_parameter:
-    "该模型不接受 max_tokens，请将 Token 限制参数改为 max_completion_tokens",
+  provider_token_parameter: "接口不兼容当前 Responses 请求，请检查 API 地址和服务能力",
   provider_rate_limit: "模型接口限流，请稍后再试",
   provider_timeout: "模型请求超时",
   provider_network: "无法连接模型接口",

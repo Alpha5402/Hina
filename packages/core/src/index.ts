@@ -1,4 +1,5 @@
-export { parseActionProposal, parseEvent } from "./validation.ts";
+export type { Decision, DecisionResult } from "./decision.ts";
+export { parseDecisionResult } from "./decision.ts";
 export type {
   Model,
   ModelImage,
@@ -7,7 +8,8 @@ export type {
   ModelResponse,
   ModelUsage,
 } from "./model.ts";
-export { parseModelResponse } from "./model.ts";
+export { parseModelResponse, parseModelUsage } from "./model.ts";
+export { parseActionProposal, parseEvent } from "./validation.ts";
 
 export type Awaitable<T> = T | Promise<T>;
 export type Dispose = () => Awaitable<void>;
@@ -43,7 +45,7 @@ export interface RuntimeEvent {
   readonly conversationId: string;
   /** 缺省表示渠道尚未提供分类；不根据标识符格式猜测。 */
   readonly conversationType?: "direct" | "group" | "channel";
-  /** 渠道明确识别出的直接寻址，例如群内 @角色；缺省不授予群聊回复权限。 */
+  /** 渠道明确识别出的直接寻址信息，例如群内 @角色；不作为群聊调用门槛。 */
   readonly directedToCharacter?: boolean;
   readonly content: TextContent | MediaContent;
 }

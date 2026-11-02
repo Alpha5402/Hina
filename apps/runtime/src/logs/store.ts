@@ -7,8 +7,8 @@ import {
   type MessageLogPage,
   type MessageLogQuery,
   type MessageProcessing,
-  parseProcessing,
   parseLogQuery,
+  parseProcessing,
 } from "@hina/logs";
 
 export interface MessageLogStore {
@@ -244,7 +244,10 @@ export class SQLiteMessageLogStore implements MessageLogStore {
     for (const row of rows) {
       const entry = this.entry(row);
       const processing = entry.processing;
-      if (!processing || !["generating", "generated", "sending"].includes(processing.status))
+      if (
+        !processing ||
+        !["deciding", "generating", "generated", "sending"].includes(processing.status)
+      )
         continue;
       this.recordProcessing(entry, {
         status: "failed",
@@ -253,9 +256,12 @@ export class SQLiteMessageLogStore implements MessageLogStore {
             ? "send"
             : processing.status === "generated"
               ? "policy"
-              : "model",
+              : processing.status === "deciding"
+                ? "decision"
+                : "model",
         code: processing.status === "sending" ? "delivery_unconfirmed" : "interrupted",
         ...("response" in processing ? { response: processing.response } : {}),
+        ...(processing.decision ? { decision: processing.decision } : {}),
       });
     }
   }

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { object } from "@hina/settings";
 import { abortable, operationScope } from "../src/operations";
 import { QQChannel } from "../src/qq/channel";
 import { createQQClient } from "../src/qq/client";
@@ -85,6 +86,20 @@ test("官方 QQ SDK 在 Bun 下完成 Token、网关、私聊/群聊接收和被
           }),
         );
         socket.send(JSON.stringify({ ...c2c, s: 4 }));
+        socket.send(
+          JSON.stringify({
+            op: 0,
+            t: "GROUP_MESSAGE_CREATE",
+            s: 5,
+            d: {
+              id: "group-plain",
+              group_openid: "fixture-group",
+              author: { member_openid: "member" },
+              content: "/ping",
+              timestamp: "2026-11-03T00:00:00Z",
+            },
+          }),
+        );
       },
     },
   });
@@ -96,7 +111,7 @@ test("官方 QQ SDK 在 Bun 下完成 Token、网关、私聊/群聊接收和被
   runtime.use({
     afterSend: () => {
       sent += 1;
-      if (sent === 2) complete.resolve();
+      if (sent === 3) complete.resolve();
     },
   });
   const scope = operationScope(3000);
@@ -106,6 +121,7 @@ test("官方 QQ SDK 在 Bun 下完成 Token、网关、私聊/群聊接收和被
     expect(intents).toBe(1 << 25);
     expect(requests.map((request) => request.path).sort()).toEqual([
       "/v2/groups/fixture-group/messages",
+      "/v2/groups/fixture-group/messages",
       "/v2/users/fixture-user/messages",
     ]);
     for (const request of requests) {
@@ -113,10 +129,15 @@ test("官方 QQ SDK 在 Bun 下完成 Token、网关、私聊/群聊接收和被
       expect(request.body).toEqual({
         content: "Hina QQ Bot 已连接。",
         msg_type: 0,
-        msg_id: request.path.includes("groups") ? "group-1" : "c2c-1",
+        msg_id: object(request.body).msg_id,
         msg_seq: 1,
       });
     }
+    expect(requests.map((request) => object(request.body).msg_id).sort()).toEqual([
+      "c2c-1",
+      "group-1",
+      "group-plain",
+    ]);
     const cancellation = new AbortController();
     const pending = client
       .sendReply(

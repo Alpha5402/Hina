@@ -6,10 +6,11 @@ import {
   integer,
   type LlmSettings,
   type LlmSettingsUpdate,
+  migrateLlmSettings,
   object,
+  type PublicLlmSettings,
   parseLlmSettings,
   parseSecretToken,
-  type PublicLlmSettings,
 } from "@hina/settings";
 import { ServiceError } from "./errors";
 import type { SecretKeyStore } from "./key-store";
@@ -98,7 +99,7 @@ export class EncryptedSettingsStore {
       } finally {
         plain.fill(0);
       }
-      const settings = parseLlmSettings(payload);
+      const settings = migrateLlmSettings(payload);
       const token = parseSecretToken(payload.token);
       this.cached = Object.freeze({
         ...settings,
@@ -137,8 +138,8 @@ export class EncryptedSettingsStore {
     if (!token) throw new ServiceError("token_required");
     if (
       token.length >= 8 &&
-      [settings.endpoint, settings.model, settings.systemPrompt].some((field) =>
-        field.includes(token),
+      [settings.endpoint, settings.model, settings.decisionModel, settings.systemPrompt].some(
+        (field) => field.includes(token),
       )
     )
       throw new ServiceError("invalid_config");

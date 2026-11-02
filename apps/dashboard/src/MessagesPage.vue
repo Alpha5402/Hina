@@ -14,9 +14,9 @@ import { computed, nextTick, ref, shallowRef, watch } from "vue";
 import LogSelect from "./LogSelect.vue";
 import MessageDetail from "./MessageDetail.vue";
 import { messageText } from "./message-display";
-import { useMessageLog } from "./use-message-log";
+import { decisionLabel, processingLabel } from "./processing-display";
 import ThemeButton from "./ThemeButton.vue";
-import { processingLabel } from "./processing-display";
+import { useMessageLog } from "./use-message-log";
 
 const {
   data,
@@ -207,6 +207,7 @@ watch(
             <col class="col-category">
             <col class="col-sender">
             <col>
+            <col class="col-decision">
             <col class="col-processing">
             <col class="col-detail">
           </colgroup>
@@ -218,6 +219,7 @@ watch(
               <th scope="col">会话</th>
               <th scope="col">发送者</th>
               <th scope="col">内容</th>
+              <th scope="col">决策</th>
               <th scope="col">状态</th>
               <th scope="col"><span class="sr-only">详情</span></th>
             </tr>
@@ -252,6 +254,9 @@ watch(
                 </button>
               </td>
               <td>
+                <span class="decision-state">{{ decisionLabel(message) }}</span>
+              </td>
+              <td>
                 <span
                   class="processing-state"
                   :data-state="message.processing?.status ?? 'received'"
@@ -272,7 +277,7 @@ watch(
               </td>
             </tr>
             <tr v-if="!data?.messages.length">
-              <td colspan="8" class="empty-state">
+              <td colspan="9" class="empty-state">
                 {{
                   loading && !data
                     ? "正在加载…"

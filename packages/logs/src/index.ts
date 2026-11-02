@@ -1,6 +1,10 @@
 import { type ModelResponse, parseEvent, parseModelResponse, type RuntimeEvent } from "@hina/core";
-export { parseModelResponse } from "@hina/core";
-export type { ModelResponse } from "@hina/core";
+import { type DecisionTrace, parseDecisionTrace } from "./decision-trace";
+
+export type { DecisionResult, ModelResponse } from "@hina/core";
+export { parseDecisionResult, parseModelResponse } from "@hina/core";
+export type { DecisionTrace } from "./decision-trace";
+export { parseDecisionTrace } from "./decision-trace";
 
 export const messageCategories = ["direct", "group", "channel", "unknown"] as const;
 export type MessageCategory = (typeof messageCategories)[number];
@@ -13,7 +17,7 @@ export interface MessageLogEntry extends RuntimeEvent {
   readonly processingVersion?: number;
 }
 
-export type MessageProcessing =
+export type MessageProcessing = { readonly decision?: DecisionTrace } & (
   | {
       readonly status: "skipped";
       readonly reason:
@@ -24,19 +28,31 @@ export type MessageProcessing =
         | "image-limit"
         | "input-limit"
         | "budget"
-        | "configuration-unavailable";
+        | "configuration-unavailable"
+        | "decision-threshold"
+        | "decision-refused";
     }
-  | { readonly status: "generating"; readonly startedAt: string }
+  | { readonly status: "deciding" | "generating"; readonly startedAt: string }
   | { readonly status: "generated" | "sending" | "blocked"; readonly response: ModelResponse }
   | { readonly status: "sent"; readonly response: ModelResponse; readonly sentAt: string }
   | {
       readonly status: "failed";
-      readonly stage: "model" | "policy" | "send";
+      readonly stage: "decision" | "model" | "policy" | "send";
       readonly code: string;
       readonly response?: ModelResponse;
-    };
+    }
+);
 
 export function parseProcessing(input: unknown): MessageProcessing {
+  const value = record(input);
+  const state = parseProcessingState(input);
+  return {
+    ...state,
+    ...(value.decision === undefined ? {} : { decision: parseDecisionTrace(value.decision) }),
+  };
+}
+
+function parseProcessingState(input: unknown): MessageProcessing {
   const value = record(input);
   if (
     value.status === "skipped" &&
@@ -50,6 +66,8 @@ export function parseProcessing(input: unknown): MessageProcessing {
       "input-limit",
       "budget",
       "configuration-unavailable",
+      "decision-threshold",
+      "decision-refused",
     ].includes(value.reason)
   )
     return {
@@ -66,8 +84,8 @@ export function parseProcessing(input: unknown): MessageProcessing {
       throw new TypeError("处理时间无效");
     return new Date(input).toISOString();
   };
-  if (value.status === "generating")
-    return { status: "generating", startedAt: time(value.startedAt) };
+  if (value.status === "generating" || value.status === "deciding")
+    return { status: value.status, startedAt: time(value.startedAt) };
   if (value.status === "generated" || value.status === "sending" || value.status === "blocked")
     return { status: value.status, response: parseModelResponse(value.response) };
   if (value.status === "sent")
@@ -79,13 +97,13 @@ export function parseProcessing(input: unknown): MessageProcessing {
   if (
     value.status === "failed" &&
     typeof value.stage === "string" &&
-    ["model", "policy", "send"].includes(value.stage) &&
+    ["decision", "model", "policy", "send"].includes(value.stage) &&
     typeof value.code === "string" &&
     /^[a-z_-]{1,64}$/.test(value.code)
   )
     return {
       status: "failed",
-      stage: value.stage as "model" | "policy" | "send",
+      stage: value.stage as "decision" | "model" | "policy" | "send",
       code: value.code,
       ...(value.response === undefined ? {} : { response: parseModelResponse(value.response) }),
     };

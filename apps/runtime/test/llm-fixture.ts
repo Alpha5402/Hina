@@ -6,6 +6,14 @@ import type { SecretKeyStore } from "../src/settings/key-store";
 import { EncryptedSettingsStore } from "../src/settings/store";
 
 export const fixtureToken = "fixture-llm-token-not-a-real-key";
+export function responsePayload(text = "这是模型回复") {
+  return {
+    model: "fixture-model",
+    status: "completed",
+    output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }],
+    usage: { input_tokens: 8, output_tokens: 2, total_tokens: 10 },
+  };
+}
 export class MemoryKeyStore implements SecretKeyStore {
   readonly values = new Map<string, string>();
   sets = 0;

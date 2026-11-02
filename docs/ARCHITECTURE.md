@@ -1,23 +1,23 @@
 # Hina 架构与当前实现
 
-开发纪律和产品方向以根目录 `AGENTS.md` 为基线。本文区分已经实现的协议与后续里程碑，不把 Hook 当作已完成的 Decision 或插件隔离系统。
+开发纪律和产品方向以根目录 `AGENTS.md` 为基线。本文区分已经实现的协议与后续里程碑，不把进程内 Hook 视为插件隔离系统。
 
 ## 当前范围
 
 已实现 M0 的 Mock Channel 输入输出子集、QQ 官方平台文本/图片适配器、本机消息日志，以及可选的 OpenAI 兼容模型通路：事件归一化、输入去重、有限短期上下文、可注销 Hook、统一输出检查、Channel 生命周期，以及源码和构建产物的运行路径。QQ 适配器边界见 [QQ Bot 接入](./QQ_BOT.md)，日志读模型见 [消息日志](./MESSAGE_LOG.md)，模型设置和执行约束见 [模型设置](./LLM.md)。
 
-尚未实现 Decision、持久角色、长期记忆、可恢复 Execution、持久审批或动态插件加载。因此这不是原版 M0/M1 全部验收项完成的声明。`plugin-sdk` 等尚无实际职责的包保持未创建；本地协议测试与真实服务验收分别记录。
+已增加可选 Decision 扩展点及 OpenAI Decisions 适配器，响应使用 Responses API。尚未实现持久角色、长期记忆、可恢复 Execution、持久审批或动态插件加载。因此这不是原版 M0/M1 全部验收项完成的声明。`plugin-sdk` 等尚无实际职责的包保持未创建；本地协议测试与真实服务验收分别记录。
 
 ## 模块职责
 
 | 位置 | 当前职责 |
 | --- | --- |
-| `packages/core` | 单一来源的 Event、Action、Channel、Hook 与 Model 契约，以及边界校验；只使用 TypeScript 标准库和标准 Web 类型 |
+| `packages/core` | 单一来源的 Event、Action、Channel、Hook、Model 与 Decision 契约，以及边界校验；只使用 TypeScript 标准库和标准 Web 类型 |
 | `packages/logs` | 日志条目、查询、分页响应及前后端边界校验，不导入宿主或数据库 |
 | `packages/settings` | 公共模型设置、变更版本与运行时校验；不依赖宿主或供应商 SDK，不存储 Token |
 | `apps/dashboard` | Vue 3 日志、模型设置与连接测试；仅提交用户输入的 Token，不读取已存 Token，不执行 Action |
 | `apps/runtime/src/logs/` | MessageLogStore 接口、Bun SQLite 适配器、本机 HTTP 与受限图片读取 |
-| `apps/runtime/src/models/` | OpenAI 兼容 Model 适配器与模型 Hook，生成 Action 提案，发送前复核配置和目标 |
+| `apps/runtime/src/models/` | OpenAI Responses/Decisions HTTP 适配器与处理 Hook；决策门控后生成 Action，发送前复核配置、结果和目标 |
 | `apps/runtime/src/settings/` | 加密配置存储、系统主密钥适配器、同源设置与测试 API |
 | `apps/runtime/src/runtime.ts` | 组装单个 Channel、调度会话、执行 Hook 和输出检查、管理停止与回滚 |
 | `apps/runtime/src/context.ts` | 会话键、去重键和有限短期上下文管理 |
@@ -32,7 +32,7 @@
 
 ## 协议与输入边界
 
-- `RuntimeEvent` 包含原始事件 ID、`origin.channelId/accountId`、时间、参与者、会话和类型明确的内容。可选 `conversationType` 为 `direct/group/channel`，缺省表示未分类。新增可选 `directedToCharacter` 表示平台明确寻址；QQ 适配器仅从私聊或真实 `GROUP_AT_MESSAGE_CREATE` 事件设置，正文伪造 @ 不构成授权。旧事件省略该字段仍兼容，但不会获得群聊模型回复权限。
+- `RuntimeEvent` 包含原始事件 ID、`origin.channelId/accountId`、时间、参与者、会话和类型明确的内容。可选 `conversationType` 为 `direct/group/channel`，缺省表示未分类。`directedToCharacter` 保留平台明确寻址信息，QQ 私聊和 `GROUP_AT_MESSAGE_CREATE` 为 true，普通群消息为 false；该字段不再作为群聊调用门槛。旧事件省略该字段仍兼容。
 - 文本沿用 `content: {type: "text", text}`；图片或图文使用 `{type: "message", text, images}`，每条含 1–10 个图片附件。附件只含可序列化的 HTTPS URL、媒体类型及可选文件名，不泄露 SDK 类型。文本最多 16384 字符，图片地址最多 4096 字符，文件名最多 256 字符。
 - 这是内部 0.0.0 协议的联合类型扩展：旧文本输入兼容，消费者读取图片前需按 `content.type` 缩窄。Action 输出仍仅支持文本，不能把图片事件当作图片发送能力。运行时校验、日志反序列化与前端响应校验均处理新联合类型。
 - 接收时间字符串必须包含时区，进入领域层后统一转为 UTC ISO 格式。标识符长度为 1–256，文本最多 16384 个 UTF-16 字符。
@@ -74,7 +74,7 @@ Mock 输入 → 校验归一化 → 来源检查 → 去重 → 按会话排队
 - 同一会话串行，失败事件不会使队列永久失败；独立会话可并行。默认最多接受 256 个待完成事件，超出容量直接拒绝，未接收的事件不记为已处理。
 - 短期上下文默认每个会话 20 个事件、最多 100 个最近使用的会话，每个事件按本地观察时间保留 5 分钟。过期数据在下一次追加时清理，不启动背景清理计时器；停止时全部清空。
 - Mock 输出缓存默认只保留最近 100 条，实际输出也可交给注入的 Sink。
-- 一个活动事件默认有 5 秒处理期限；QQ 宿主显式设为 60 秒，覆盖图片下载、模型请求与 QQ 发送。生命周期操作和错误 Hook 同样有界。期限或停止信号会中断 Runtime 的等待，后续发送不会继续。
+- 一个活动事件默认有 5 秒处理期限；QQ 宿主显式设为 90 秒，覆盖图片下载、决策、响应与 QQ 发送。生命周期操作和错误 Hook 同样有界。期限或停止信号会中断 Runtime 的等待，后续发送不会继续。
 - 不自动重试处理或发送。失败事件在去重窗口内仍被记住，避免发送状态不确定时重复输出。
 - `PipelineError` 包含阶段、事件 ID、已确认发送数与原始原因。`afterSend` 失败时已确认发送数仍保留；`send` 失败可能存在未确认副作用，不能由计数推断没有发送。
 
@@ -104,7 +104,13 @@ Mock 输入 → 校验归一化 → 来源检查 → 去重 → 按会话排队
 
 设置 API 的写请求同时检查回环 Host、Origin、Fetch Metadata、JSON Content-Type 与宿主随机 CSRF nonce；不启用跨域访问或远程管理。连接测试只调用固定短提示，不保存配置、不开启回复、不发送 QQ 消息。模型回复开关默认关闭；开启后仅共享本配置生效后允许处理的消息，清除或更改配置会取消在途模型调用并清空该共享窗口。
 
-模型 Hook 按范围、输入长度、图片数量和预算进行规则门控，最多 2 个并发调用、每分钟 30 次尝试；不使用 Decision。Model 仅生成文本，Runtime 为其创建 Action 并在 `beforeSend` 复核配置版本、开关、账号、当前会话及内容；Channel 不调用模型。失败不自动重试，发送不确定时保留响应并标记未确认。本地取消无法撤回已提交给 QQ 的发送。
+模型 Hook 按范围、输入长度、图片数量和预算进行规则门控，最多 2 个并发处理轮次、每分钟 30 轮尝试；一轮最多一次决策和一次响应。配置了决策模型时先用 `Decision.evaluate` 返回类型明确的概率或拒绝，概率严格大于配置阈值才调用 Model。未配置时明确记录跳过并直达响应；已配置但失败、拒绝或未过阈值时不降级生成。低分事件仍可留在同配置的短期上下文。
+
+`Decision`、`DecisionResult` 及实际用量校验在 core 定义，平台和 HTTP 字段不进入核心。响应请求通过 `/responses`、`store:false`、显式输入历史和 `max_output_tokens` 执行，不保留供应商会话 ID；决策通过 `/decisions` 的命名 predicate 读取概率，不伪造自然语言理由。两者共用已保存的 API/Token，可独立配置模型 ID。详情与列表记录决策结果、阈值、拒绝/失败类别及实际指标；日志 Schema v2 无需增加列，旧条目没有决策字段显示未知，新状态消费者需同步升级。
+
+旧加密配置读取时保留原 Token、主密钥及版本，将 Chat Completions 地址归一化到 Responses，原群聊范围迁移为私聊及群聊，决策默认留空。模型回复范围不再按 @ 筛选；QQ 平台若未推送全量群事件，本地无法补录。仅当用户保存时用原加密机制写入新字段，不重新索取 Token；新格式不承诺旧二进制可读取。
+
+Model 仅生成文本，Runtime 为其创建 Action 并在 `beforeSend` 复核配置版本、开关、决策通过状态、账号、当前会话及内容；Channel 不调用模型。失败不自动重试，发送不确定时保留响应并标记未确认。本地取消无法撤回已提交给 QQ 的发送。协议与失败策略见 [ADR 0002](./adr/0002-optional-decision-and-responses.md)。
 
 `bun run test` 覆盖协议、Hook、有界上下文、去重、会话调度、授权否决、错误与清理。`bun run smoke` 先构建，再用实际构建产物验证 JSONL、演示模式和错误退出。
 

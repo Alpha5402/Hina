@@ -1,14 +1,14 @@
 import type { ConnectionStatus } from "@hina/logs";
 import { startLogServer } from "./logs/server";
 import { SQLiteMessageLogStore } from "./logs/store";
-import { dashboardDirectory, llmSettingsFile, messageLogFile, qqCredentialsFile } from "./paths";
 import { ModelPipeline } from "./models/pipeline";
-import { SystemSecretKeyStore } from "./settings/key-store";
-import { EncryptedSettingsStore } from "./settings/store";
+import { dashboardDirectory, llmSettingsFile, messageLogFile, qqCredentialsFile } from "./paths";
 import { QQChannel } from "./qq/channel";
 import { loadQQCredentials } from "./qq/config";
 import { qqHooks } from "./qq/hooks";
 import { Runtime } from "./runtime";
+import { SystemSecretKeyStore } from "./settings/key-store";
+import { EncryptedSettingsStore } from "./settings/store";
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -32,7 +32,7 @@ async function main(): Promise<void> {
     .load()
     .catch(() => console.error("模型配置未能解锁，保持接收；请在设置页检查系统凭据库。"));
   let logServer: ReturnType<typeof startLogServer> | undefined;
-  const runtime = new Runtime(channel, { timeoutMs: 60_000 });
+  const runtime = new Runtime(channel, { timeoutMs: 90_000 });
   const pipeline = new ModelPipeline(settings, store, credentials.appId);
   const unregister = runtime.use(replyEnabled ? qqHooks(credentials.appId, true) : pipeline.hooks);
   let received = 0;

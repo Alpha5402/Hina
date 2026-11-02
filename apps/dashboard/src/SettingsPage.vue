@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import { type ModelResponse, parseModelResponse } from "@hina/logs";
+import {
+  type DecisionResult,
+  type ModelResponse,
+  parseDecisionResult,
+  parseModelResponse,
+} from "@hina/logs";
 import {
   defaultLlmSettings,
   type LlmSettingsUpdate,
@@ -19,11 +24,18 @@ const token = ref("");
 const hasToken = ref(false);
 const revision = ref(0);
 const loaded = ref(false);
-const busy = ref<"load" | "save" | "test">();
+const busy = ref<"load" | "save" | "test" | "test-decision">();
 const error = ref("");
 const feedback = ref("");
 const advanced = ref(false);
 const result = shallowRef<ModelResponse>();
+const decisionResult = shallowRef<DecisionResult>();
+const thresholdPercent = computed({
+  get: () => Number((form.decisionThreshold * 100).toFixed(2)),
+  set: (value: number) => {
+    form.decisionThreshold = value / 100;
+  },
+});
 let csrf = "";
 const original = ref("");
 let controller: AbortController | undefined;
@@ -31,11 +43,7 @@ let disposed = false;
 const dirty = computed(() => token.value.length > 0 || JSON.stringify(form) !== original.value);
 const scopeOptions = [
   { value: "direct", label: "仅私聊" },
-  { value: "direct-and-mentions", label: "私聊及群内 @" },
-] as const;
-const tokenOptions = [
-  { value: "max_tokens", label: "max_tokens" },
-  { value: "max_completion_tokens", label: "max_completion_tokens" },
+  { value: "direct-and-groups", label: "私聊及群聊" },
 ] as const;
 
 function apply(input: unknown) {
@@ -80,6 +88,7 @@ async function load() {
   token.value = "";
   feedback.value = "";
   result.value = undefined;
+  decisionResult.value = undefined;
   try {
     const body = await request("/api/llm/settings", {}, 20_000);
     if (disposed) return;
@@ -95,11 +104,12 @@ async function load() {
   }
 }
 
-async function submit(kind: "save" | "test") {
+async function submit(kind: "save" | "test" | "test-decision") {
   if (!loaded.value || busy.value) return;
   error.value = "";
   feedback.value = "";
   result.value = undefined;
+  decisionResult.value = undefined;
   let update: LlmSettingsUpdate;
   try {
     update = parseSettingsUpdate({
@@ -116,7 +126,11 @@ async function submit(kind: "save" | "test") {
   if (kind === "save") token.value = "";
   try {
     const value = await request(
-      kind === "save" ? "/api/llm/settings" : "/api/llm/test",
+      kind === "save"
+        ? "/api/llm/settings"
+        : kind === "test"
+          ? "/api/llm/test"
+          : "/api/llm/test-decision",
       {
         method: kind === "save" ? "PUT" : "POST",
         headers: { "Content-Type": "application/json", "X-Hina-CSRF": csrf },
@@ -128,9 +142,12 @@ async function submit(kind: "save" | "test") {
     if (kind === "save") {
       apply(value.settings);
       feedback.value = "已保存";
-    } else {
+    } else if (kind === "test") {
       result.value = parseModelResponse(value.response);
-      feedback.value = "连接成功";
+      feedback.value = "响应模型连接成功";
+    } else {
+      decisionResult.value = parseDecisionResult(value.decision);
+      feedback.value = "决策模型连接成功";
     }
   } catch (cause) {
     if (!disposed)
@@ -146,6 +163,7 @@ watch(
   () => {
     feedback.value = "";
     result.value = undefined;
+    decisionResult.value = undefined;
   },
   { flush: "sync" },
 );
@@ -191,21 +209,53 @@ onUnmounted(() => {
                   autocomplete="off"
                   spellcheck="false"
                 >
-                <p class="field-hint">支持 Base URL 或完整 Chat Completions 地址</p>
+                <p class="field-hint">共用 API 与 Token，支持 Base URL 或 Responses 地址</p>
               </div>
             </div>
             <div class="form-row">
-              <label for="llm-model">模型</label>
+              <label for="llm-model">响应模型</label>
               <input
                 id="llm-model"
                 v-model="form.model"
                 class="setting-input"
                 type="text"
-                placeholder="模型名称"
+                placeholder="例如 gpt-6-luna"
                 maxlength="128"
                 autocomplete="off"
                 spellcheck="false"
               >
+            </div>
+            <div class="form-row">
+              <label for="llm-decision">决策模型</label>
+              <div class="field-stack">
+                <input
+                  id="llm-decision"
+                  v-model="form.decisionModel"
+                  class="setting-input"
+                  type="text"
+                  placeholder="留空跳过决策"
+                  maxlength="128"
+                  autocomplete="off"
+                  spellcheck="false"
+                >
+                <p class="field-hint">使用 Decision API；OpenAI 当前支持 gpt-6-luna</p>
+              </div>
+            </div>
+            <div class="form-row">
+              <label for="llm-threshold">回复阈值（%）</label>
+              <div class="field-stack">
+                <input
+                  id="llm-threshold"
+                  v-model.number="thresholdPercent"
+                  class="setting-input number-input"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  :disabled="!form.decisionModel.trim()"
+                >
+                <p class="field-hint">回复概率严格高于阈值，才调用响应模型</p>
+              </div>
             </div>
             <div class="form-row">
               <label for="llm-token">Secret Token</label>
@@ -229,13 +279,18 @@ onUnmounted(() => {
             <div class="switch-row">
               <div>
                 <span class="field-label">模型回复</span>
-                <p class="field-hint">开启后，新消息及本轮上下文会发送到所配 API，并自动回复</p>
+                <p class="field-hint">开启后，新消息及上下文会发送到所配 API，通过门控后回复</p>
               </div>
               <SettingSwitch v-model="form.enabled" label="模型回复" />
             </div>
             <div class="form-row">
               <span class="field-label">回复范围</span>
-              <LogSelect v-model="form.replyScope" label="回复范围" :options="scopeOptions" />
+              <div class="field-stack">
+                <LogSelect v-model="form.replyScope" label="回复范围" :options="scopeOptions" />
+                <p v-if="form.replyScope === 'direct-and-groups'" class="field-hint">
+                  未 @ 群消息需要 QQ 侧开启“接收所有消息”
+                </p>
+              </div>
             </div>
             <div class="switch-row">
               <div>
@@ -280,14 +335,6 @@ onUnmounted(() => {
                 >
               </div>
               <div class="form-row">
-                <span class="field-label">Token 限制参数</span>
-                <LogSelect
-                  v-model="form.tokenParameter"
-                  label="Token 限制参数"
-                  :options="tokenOptions"
-                />
-              </div>
-              <div class="form-row">
                 <label for="llm-prompt">回复提示</label
                 ><textarea
                   id="llm-prompt"
@@ -313,7 +360,14 @@ onUnmounted(() => {
             :disabled="!loaded || Boolean(busy)"
             @click="submit('test')"
           >
-            {{ busy === "test" ? "测试中…" : "测试连接" }}
+            {{ busy === "test" ? "测试中…" : "测试响应" }}
+          </button><button
+            class="secondary-button"
+            type="button"
+            :disabled="!loaded || Boolean(busy) || !form.decisionModel.trim()"
+            @click="submit('test-decision')"
+          >
+            {{ busy === "test-decision" ? "测试中…" : "测试决策" }}
           </button><span class="settings-feedback" role="status">{{ feedback }}</span>
         </div>
         <p v-if="error" class="settings-error" role="alert">
@@ -330,6 +384,20 @@ onUnmounted(() => {
             ></span
           >
           <p>{{ result.text }}</p>
+        </div>
+        <div v-if="decisionResult" class="test-result">
+          <span
+            >{{ decisionResult.model }}
+            · {{ decisionResult.durationMs }} ms<span v-if="decisionResult.usage">
+              · {{ decisionResult.usage.totalTokens }} Token</span
+            ></span
+          >
+          <p v-if="decisionResult.type === 'probability'">
+            回复概率 {{ (decisionResult.probability * 100).toFixed(1) }}% · 阈值
+            {{ thresholdPercent }}% ·
+            {{ decisionResult.probability > form.decisionThreshold ? "通过" : "不回复" }}
+          </p>
+          <p v-else>模型拒绝判断，不会调用响应模型</p>
         </div>
       </form>
     </main>

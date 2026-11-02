@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createCipheriv, randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { parseSettingsUpdate } from "@hina/settings";
 import { startLogServer } from "../src/logs/server";
 import { SQLiteMessageLogStore } from "../src/logs/store";
 import { EncryptedSettingsStore } from "../src/settings/store";
-import { fixtureToken, settingsFixture, settingsUpdate } from "./llm-fixture";
+import { fixtureToken, responsePayload, settingsFixture, settingsUpdate } from "./llm-fixture";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -17,6 +18,61 @@ async function fixture() {
 }
 
 describe("加密模型配置", () => {
+  test("旧配置保留凭据并迁移到 Responses，决策默认未配置", async () => {
+    const { store, file, keys } = await fixture();
+    await store.save(settingsUpdate());
+    const envelope = JSON.parse(await readFile(file, "utf8"));
+    const value = keys.values.get(envelope.vaultId);
+    if (!value) throw new Error("测试主密钥缺失");
+    const {
+      decisionModel: _decision,
+      decisionThreshold: _threshold,
+      ...legacy
+    } = store.current() ?? {};
+    const iv = randomBytes(12);
+    const key = Buffer.from(value, "base64");
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    cipher.setAAD(Buffer.from(`hina:llm:v1:${envelope.vaultId}`));
+    const ciphertext = Buffer.concat([
+      cipher.update(
+        JSON.stringify({
+          ...legacy,
+          endpoint: "https://models.example.test/v1/chat/completions",
+          replyScope: "direct-and-mentions",
+          tokenParameter: "max_completion_tokens",
+        }),
+      ),
+      cipher.final(),
+    ]);
+    await writeFile(
+      file,
+      JSON.stringify({
+        ...envelope,
+        iv: iv.toString("base64"),
+        tag: cipher.getAuthTag().toString("base64"),
+        ciphertext: ciphertext.toString("base64"),
+      }),
+    );
+    key.fill(0);
+    const migrated = new EncryptedSettingsStore(file, keys);
+    cleanups.push(() => migrated.close());
+    const publicSettings = await migrated.publicView();
+    expect(publicSettings).toMatchObject({
+      model: "fixture-model",
+      endpoint: "https://models.example.test/v1/responses",
+      decisionModel: "",
+      decisionThreshold: 0.7,
+      replyScope: "direct-and-groups",
+      hasToken: true,
+      revision: 1,
+    });
+    expect(migrated.current()?.token).toBe(fixtureToken);
+    expect("tokenParameter" in publicSettings).toBe(false);
+    expect(keys.sets).toBe(1);
+    expect(() => settingsUpdate({ decisionThreshold: 1.1 })).toThrow();
+    expect(() => settingsUpdate({ decisionThreshold: NaN })).toThrow();
+    expect(() => settingsUpdate({ decisionModel: "bad\nmodel" })).toThrow();
+  });
   test("Token 和配置只以密文落盘，重开可解密，公共响应不回显秘密", async () => {
     const { store, file, keys } = await fixture();
     const saved = await store.save(settingsUpdate());
@@ -90,7 +146,7 @@ describe("加密模型配置", () => {
     expect(() => settingsUpdate({ endpoint: "http://example.test/v1" })).toThrow();
     expect(() => settingsUpdate({ endpoint: "http://127.attacker.example/v1" })).toThrow();
     expect(settingsUpdate({ endpoint: "http://127.0.0.2:3412/v1" }).endpoint).toBe(
-      "http://127.0.0.2:3412/v1/chat/completions",
+      "http://127.0.0.2:3412/v1/responses",
     );
     expect(() => settingsUpdate({ token: "fixture\nheader" })).toThrow();
     expect(() => settingsUpdate({ maxOutputTokens: 99_999 })).toThrow();
@@ -111,11 +167,15 @@ describe("设置接口", () => {
           authorization: request.headers.get("Authorization"),
           body: await request.json(),
         });
-        return Response.json({
-          model: "fixture-model",
-          choices: [{ message: { content: `OK ${fixtureToken}` }, finish_reason: "stop" }],
-          usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
-        });
+        return Response.json(
+          request.url.endsWith("/decisions")
+            ? {
+                model: "gpt-6-luna",
+                answers: [{ type: "predicate", name: "should_reply", probability: 0.95 }],
+                usage: { input_tokens: 12, output_tokens: 0, total_tokens: 12 },
+              }
+            : responsePayload(`OK ${fixtureToken}`),
+        );
       },
     });
     cleanups.push(() => provider.stop(true));
@@ -164,9 +224,36 @@ describe("设置接口", () => {
     expect(requests[0]?.body).toMatchObject({
       model: "fixture-model",
       stream: false,
-      max_tokens: 512,
-      messages: [{ role: "user", content: "请只回复 OK。" }],
+      max_output_tokens: 512,
+      store: false,
+      input: [{ role: "user", content: "请只回复 OK。" }],
     });
+    expect((await mutate(base, testUpdate, "test-decision", "POST")).status).toBe(400);
+    expect(
+      (
+        await mutate(
+          { ...base, "X-Hina-CSRF": "wrong" },
+          { ...testUpdate, decisionModel: "gpt-6-luna" },
+          "test-decision",
+          "POST",
+        )
+      ).status,
+    ).toBe(403);
+    const evaluated = await mutate(
+      base,
+      { ...testUpdate, decisionModel: "gpt-6-luna" },
+      "test-decision",
+      "POST",
+    );
+    expect(evaluated.status).toBe(200);
+    const decision = await evaluated.json();
+    expect(decision).toMatchObject({
+      decision: { type: "probability", probability: 0.95 },
+      passed: true,
+      threshold: 0.7,
+    });
+    expect(JSON.stringify(decision)).not.toContain(fixtureToken);
+    expect(requests).toHaveLength(2);
     expect(store.current()?.revision).toBe(1);
     expect(
       logs.query({

@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { type LlmSettingsUpdate, parseSettingsUpdate } from "@hina/settings";
 import { readLimitedJson } from "../http";
 import { OpenAICompatibleModel } from "../models/openai-compatible";
+import { OpenAIDecision } from "../models/openai-decision";
 import { operationScope } from "../operations";
 import { ServiceError } from "./errors";
 import type { EncryptedSettingsStore } from "./store";
@@ -22,7 +23,7 @@ export function settingsApi(
       if (
         !(
           (path === "/api/llm/settings" && request.method === "PUT") ||
-          (path === "/api/llm/test" && request.method === "POST")
+          (["/api/llm/test", "/api/llm/test-decision"].includes(path) && request.method === "POST")
         )
       )
         return json({ error: { code: "method", message: "请求方法无效" } }, 405);
@@ -60,13 +61,27 @@ export function settingsApi(
       testing = true;
       try {
         const config = await store.candidate(update);
+        const signal = AbortSignal.any([request.signal, shutdown]);
+        if (path === "/api/llm/test-decision") {
+          if (!config.decisionModel) throw new ServiceError("decision_required");
+          const decision = await new OpenAIDecision(config).evaluate(
+            [{ role: "user", text: "Hina，请帮我解释一下什么是事件驱动程序。" }],
+            signal,
+          );
+          return json({
+            decision,
+            threshold: config.decisionThreshold,
+            passed:
+              decision.type === "probability" && decision.probability > config.decisionThreshold,
+          });
+        }
         const model = new OpenAICompatibleModel(config);
         const response = await model.generate(
           {
             messages: [{ role: "user", text: "请只回复 OK。" }],
             maxOutputTokens: Math.min(config.maxOutputTokens, 512),
           },
-          AbortSignal.any([request.signal, shutdown]),
+          signal,
         );
         return json({ response });
       } finally {
