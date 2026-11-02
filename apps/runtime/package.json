@@ -8,7 +8,11 @@
     "start": "bun src/index.ts",
     "build": "bun build src/index.ts --target=bun --outdir=dist",
     "start:built": "bun dist/index.js",
+    "smoke": "bun smoke.ts",
     "typecheck": "tsc --noEmit --project tsconfig.json"
+  },
+  "dependencies": {
+    "@hina/core": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "1.4.4"

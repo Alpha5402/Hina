@@ -19,8 +19,8 @@
     "lint": "biome lint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
-    "test": "bun test --pass-with-no-tests",
-    "smoke": "bun run build && bun run --cwd apps/runtime start:built",
+    "test": "bun test",
+    "smoke": "bun run build && bun run --cwd apps/runtime smoke",
     "check": "bun run format:check && bun run lint && bun run typecheck"
   },
   "devDependencies": {
